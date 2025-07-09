@@ -3,3 +3,11 @@ pandas
 plotly
 numpy
 tensorflow
+streamlit
+numpy
+pandas
+matplotlib
+seaborn
+plotly
+pillow
+tensorflow
