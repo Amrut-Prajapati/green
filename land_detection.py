@@ -1,18 +1,16 @@
 import streamlit as st
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from PIL import Image
 import tensorflow as tf
 from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.preprocessing import image
+import numpy as np
+from PIL import Image
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import io
+import os
 
-# Set page config
+# Set page configuration
 st.set_page_config(
     page_title="Satellite Image Classifier",
     page_icon="🛰️",
@@ -24,275 +22,217 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
+        font-size: 3rem;
+        color: #1e3a8a;
         text-align: center;
-        color: #2e7d32;
-        font-size: 2.5rem;
         margin-bottom: 2rem;
     }
-    .metric-container {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
+    .sub-header {
+        font-size: 1.5rem;
+        color: #3b82f6;
+        margin-bottom: 1rem;
     }
     .prediction-box {
-        background: #f8f9fa;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 1.5rem;
         border-radius: 10px;
-        border-left: 4px solid #4CAF50;
+        color: white;
+        text-align: center;
         margin: 1rem 0;
     }
-    .sidebar-header {
-        color: #1976d2;
-        font-size: 1.2rem;
-        font-weight: bold;
-        margin-bottom: 1rem;
+    .confidence-bar {
+        background-color: #e5e7eb;
+        border-radius: 5px;
+        padding: 0.25rem;
+        margin: 0.5rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Class names and their descriptions
-CLASS_DESCRIPTIONS = {
-    'Cloudy': 'Cloud-covered areas in satellite imagery',
-    'Desert': 'Arid desert regions with minimal vegetation',
-    'Green_Area': 'Vegetation-rich areas including forests and grasslands',
-    'Water': 'Water bodies like lakes, rivers, and oceans'
-}
-
-# Color mapping for visualization
-COLOR_MAP = {
-    'Cloudy': '#f1c40f',
-    'Desert': '#e67e22',
-    'Green_Area': '#27ae60',
-    'Water': '#3498db'
-}
-
+# Cache the model loading
 @st.cache_resource
 def load_trained_model():
-    """Load the pre-trained model with caching for better performance."""
     try:
         model = load_model('Modelenv.v1.h5')
         return model
     except Exception as e:
         st.error(f"Error loading model: {e}")
+        st.info("Please make sure 'Modelenv.v1.h5' is in the same directory as this script.")
         return None
 
-def preprocess_image(image, target_size=(255, 255)):
-    """Preprocess image for model prediction."""
-    # Resize image
-    if image.mode != 'RGB':
-        image = image.convert('RGB')
+# Define class names
+CLASS_NAMES = ['Cloudy', 'Desert', 'Green_Area', 'Water']
+
+# Color mapping for classes
+CLASS_COLORS = {
+    'Cloudy': '#9ca3af',
+    'Desert': '#f59e0b',
+    'Green_Area': '#10b981',
+    'Water': '#3b82f6'
+}
+
+def preprocess_image(uploaded_image):
+    """Preprocess the uploaded image for prediction"""
+    # Convert to PIL Image if needed
+    if isinstance(uploaded_image, np.ndarray):
+        img = Image.fromarray(uploaded_image)
+    else:
+        img = uploaded_image
     
-    image = image.resize(target_size)
+    # Resize to model input size
+    img = img.resize((255, 255))
     
     # Convert to array and normalize
-    img_array = img_to_array(image)
+    img_array = image.img_to_array(img)
     img_array = np.expand_dims(img_array, axis=0)
     img_array = img_array / 255.0
     
     return img_array
 
-def predict_image(model, image):
-    """Make prediction on preprocessed image."""
-    processed_image = preprocess_image(image)
-    prediction = model.predict(processed_image)
+def predict_image(model, img_array):
+    """Make prediction on preprocessed image"""
+    prediction = model.predict(img_array)
+    predicted_class_idx = np.argmax(prediction[0])
+    predicted_class = CLASS_NAMES[predicted_class_idx]
+    confidence = prediction[0][predicted_class_idx]
     
-    class_names = ['Cloudy', 'Desert', 'Green_Area', 'Water']
-    predicted_class = class_names[np.argmax(prediction)]
-    confidence = np.max(prediction)
-    
-    # Get probabilities for all classes
-    probabilities = {}
-    for i, class_name in enumerate(class_names):
-        probabilities[class_name] = prediction[0][i]
-    
-    return predicted_class, confidence, probabilities
+    return predicted_class, confidence, prediction[0]
 
-def create_prediction_chart(probabilities):
-    """Create a visualization of prediction probabilities."""
-    fig = go.Figure(data=[
-        go.Bar(
-            x=list(probabilities.keys()),
-            y=list(probabilities.values()),
-            marker_color=[COLOR_MAP[class_name] for class_name in probabilities.keys()],
-            text=[f'{prob:.2%}' for prob in probabilities.values()],
-            textposition='auto',
-        )
-    ])
-    
-    fig.update_layout(
-        title='Prediction Probabilities',
-        xaxis_title='Land Cover Type',
-        yaxis_title='Probability',
-        yaxis=dict(range=[0, 1]),
-        showlegend=False,
-        template='plotly_white'
+def create_confidence_chart(predictions, class_names):
+    """Create a confidence chart using Plotly"""
+    fig = px.bar(
+        x=class_names,
+        y=predictions,
+        title="Prediction Confidence for Each Class",
+        labels={'x': 'Land Cover Type', 'y': 'Confidence Score'},
+        color=predictions,
+        color_continuous_scale='viridis'
     )
-    
+    fig.update_layout(
+        title_x=0.5,
+        xaxis_tickangle=-45,
+        height=400
+    )
     return fig
 
 def main():
-    # Title and description
-    st.markdown('<h1 class="main-header">🛰️ Satellite Image Land Cover Classifier</h1>', 
-                unsafe_allow_html=True)
+    # Main title
+    st.markdown('<h1 class="main-header">🛰️ Satellite Image Land Cover Classifier</h1>', unsafe_allow_html=True)
     
-    st.markdown("""
-    This application uses a deep learning model to classify satellite images into different land cover types.
-    Upload an image to get predictions for: **Cloudy**, **Desert**, **Green Area**, or **Water**.
+    # Sidebar
+    st.sidebar.markdown("## 📋 Model Information")
+    st.sidebar.markdown("""
+    **Model Details:**
+    - **Architecture**: Convolutional Neural Network
+    - **Input Size**: 255x255 pixels
+    - **Classes**: 4 land cover types
+    - **Training**: 25 epochs with data augmentation
     """)
+    
+    st.sidebar.markdown("## 🎯 Supported Classes")
+    for class_name, color in CLASS_COLORS.items():
+        st.sidebar.markdown(f"<div style='background-color: {color}; padding: 5px; margin: 2px; border-radius: 3px; color: white;'>{class_name}</div>", unsafe_allow_html=True)
     
     # Load model
     model = load_trained_model()
-    
     if model is None:
-        st.error("Model could not be loaded. Please ensure 'Modelenv.v1.h5' is in the same directory.")
-        return
-    
-    # Sidebar
-    st.sidebar.markdown('<div class="sidebar-header">🔧 Configuration</div>', unsafe_allow_html=True)
-    
-    # About model
-    with st.sidebar.expander("📊 About the Model"):
-        st.write("""
-        **Model Architecture:** CNN with 3 convolutional layers
-        
-        **Input Size:** 255x255 pixels
-        
-        **Classes:** 4 land cover types
-        
-        **Training:** 25 epochs with data augmentation
-        """)
-    
-    # Class descriptions
-    with st.sidebar.expander("🌍 Land Cover Types"):
-        for class_name, description in CLASS_DESCRIPTIONS.items():
-            st.write(f"**{class_name}:** {description}")
-    
-    # File uploader
-    st.sidebar.markdown('<div class="sidebar-header">📤 Upload Image</div>', unsafe_allow_html=True)
-    uploaded_file = st.sidebar.file_uploader(
-        "Choose a satellite image",
-        type=['jpg', 'jpeg', 'png'],
-        help="Upload a satellite image for classification"
-    )
-    
-    # Display options
-    st.sidebar.markdown('<div class="sidebar-header">🎨 Display Options</div>', unsafe_allow_html=True)
-    show_confidence = st.sidebar.checkbox("Show confidence scores", value=True)
-    show_probabilities = st.sidebar.checkbox("Show probability chart", value=True)
+        st.stop()
     
     # Main content area
     col1, col2 = st.columns([1, 1])
     
-    if uploaded_file is not None:
-        # Load and display image
-        image = Image.open(uploaded_file)
+    with col1:
+        st.markdown('<h2 class="sub-header">📤 Upload Satellite Image</h2>', unsafe_allow_html=True)
         
-        with col1:
-            st.subheader("📸 Uploaded Image")
-            st.image(image, caption="Uploaded satellite image", use_column_width=True)
-            
-            # Image information
-            st.write(f"**Size:** {image.size[0]} x {image.size[1]} pixels")
-            st.write(f"**Format:** {image.format}")
-            st.write(f"**Mode:** {image.mode}")
+        # File uploader
+        uploaded_file = st.file_uploader(
+            "Choose a satellite image...",
+            type=['png', 'jpg', 'jpeg'],
+            help="Upload a satellite image for land cover classification"
+        )
         
-        # Make prediction
-        with st.spinner("Analyzing image..."):
-            predicted_class, confidence, probabilities = predict_image(model, image)
-        
-        with col2:
-            st.subheader("🔮 Prediction Results")
+        if uploaded_file is not None:
+            # Display uploaded image
+            image_pil = Image.open(uploaded_file)
+            st.image(image_pil, caption="Uploaded Image", use_column_width=True)
             
-            # Display prediction with styled box
-            st.markdown(f"""
-            <div class="prediction-box">
-                <h3>Predicted Class: {predicted_class}</h3>
-                <p><strong>Description:</strong> {CLASS_DESCRIPTIONS[predicted_class]}</p>
-                <p><strong>Confidence:</strong> {confidence:.2%}</p>
-            </div>
-            """, unsafe_allow_html=True)
+            # Preprocess and predict
+            with st.spinner("Analyzing image..."):
+                processed_image = preprocess_image(image_pil)
+                predicted_class, confidence, all_predictions = predict_image(model, processed_image)
             
-            # Confidence metrics
-            if show_confidence:
-                # Create confidence meter
-                fig_gauge = go.Figure(go.Indicator(
-                    mode = "gauge+number",
-                    value = confidence * 100,
-                    title = {'text': "Confidence Level (%)"},
-                    domain = {'x': [0, 1], 'y': [0, 1]},
-                    gauge = {
-                        'axis': {'range': [0, 100]},
-                        'bar': {'color': COLOR_MAP[predicted_class]},
-                        'steps': [
-                            {'range': [0, 50], 'color': '#ffcccb'},
-                            {'range': [50, 80], 'color': '#ffffcc'},
-                            {'range': [80, 100], 'color': '#90ee90'}
-                        ],
-                        'threshold': {
-                            'line': {'color': "red", 'width': 4},
-                            'thickness': 0.75,
-                            'value': 80
-                        }
-                    }
-                ))
-                fig_gauge.update_layout(height=300)
-                st.plotly_chart(fig_gauge, use_container_width=True)
-        
-        # Probability chart
-        if show_probabilities:
-            st.subheader("📊 Probability Distribution")
-            fig_probs = create_prediction_chart(probabilities)
-            st.plotly_chart(fig_probs, use_container_width=True)
-            
-            # Detailed probabilities
-            st.subheader("📈 Detailed Probabilities")
-            prob_df = pd.DataFrame([
-                {'Land Cover Type': class_name, 'Probability': prob, 'Percentage': f'{prob:.2%}'}
-                for class_name, prob in probabilities.items()
-            ])
-            prob_df = prob_df.sort_values('Probability', ascending=False)
-            st.dataframe(prob_df, use_container_width=True)
+            # Display prediction
+            st.markdown('<div class="prediction-box">', unsafe_allow_html=True)
+            st.markdown(f"### 🎯 Prediction: {predicted_class}")
+            st.markdown(f"### 📊 Confidence: {confidence:.2%}")
+            st.markdown('</div>', unsafe_allow_html=True)
     
-    else:
-        # Welcome message and sample images
+    with col2:
+        if uploaded_file is not None:
+            st.markdown('<h2 class="sub-header">📊 Detailed Analysis</h2>', unsafe_allow_html=True)
+            
+            # Confidence chart
+            fig = create_confidence_chart(all_predictions, CLASS_NAMES)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Detailed predictions table
+            st.markdown("### 📈 All Class Predictions")
+            predictions_df = pd.DataFrame({
+                'Land Cover Type': CLASS_NAMES,
+                'Confidence Score': all_predictions,
+                'Percentage': [f"{pred:.2%}" for pred in all_predictions]
+            })
+            predictions_df = predictions_df.sort_values('Confidence Score', ascending=False)
+            
+            # Style the dataframe
+            st.dataframe(
+                predictions_df,
+                use_container_width=True,
+                hide_index=True
+            )
+    
+    # Additional features
+    st.markdown("---")
+    
+    # About section
+    with st.expander("ℹ️ About This Application"):
         st.markdown("""
-        ### 🚀 Get Started
+        This application uses a Convolutional Neural Network trained on satellite images to classify different types of land cover. 
         
-        1. Upload a satellite image using the sidebar
-        2. The model will classify it into one of four land cover types
+        **The model can identify:**
+        - **Cloudy**: Areas with cloud cover
+        - **Desert**: Arid and sandy regions
+        - **Green Area**: Vegetation and forests
+        - **Water**: Bodies of water like lakes, rivers, and oceans
+        
+        **How to use:**
+        1. Upload a satellite image using the file uploader
+        2. The model will automatically analyze the image
         3. View the prediction results and confidence scores
-        
-        **Supported formats:** JPG, JPEG, PNG
-        
-        **Recommended size:** Images will be resized to 255x255 pixels for processing
+        4. Explore the detailed analysis chart for all class probabilities
         """)
+    
+    # Technical details
+    with st.expander("🔧 Technical Details"):
+        st.markdown("""
+        **Model Architecture:**
+        - Input Layer: 255x255x3 (RGB images)
+        - Convolutional Layers: 3 layers with 32, 64, 128 filters
+        - Pooling Layers: MaxPooling2D after each conv layer
+        - Dense Layers: 128 units with ReLU activation
+        - Output Layer: 4 units with softmax activation
+        - Dropout: 0.5 for regularization
         
-        # Example predictions showcase
-        st.subheader("🎯 What the Model Can Identify")
-        
-        example_cols = st.columns(4)
-        for i, (class_name, description) in enumerate(CLASS_DESCRIPTIONS.items()):
-            with example_cols[i]:
-                # Create a simple colored box as placeholder
-                placeholder_color = COLOR_MAP[class_name]
-                st.markdown(f"""
-                <div style="background: {placeholder_color}; height: 100px; border-radius: 10px; 
-                           display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
-                    {class_name}
-                </div>
-                """, unsafe_allow_html=True)
-                st.write(f"**{class_name}**")
-                st.write(description)
+        **Training Details:**
+        - Optimizer: Adam
+        - Loss Function: Categorical Crossentropy
+        - Data Augmentation: Rotation, flip, zoom, shear
+        - Epochs: 25
+        """)
     
     # Footer
     st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #666; font-size: 0.9rem;">
-    🌍 Environmental Monitoring with AI | Built with Streamlit and TensorFlow
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("**Built with ❤️ using Streamlit and TensorFlow**")
 
 if __name__ == "__main__":
     main()
